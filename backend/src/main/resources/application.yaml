@@ -1,3 +1,16 @@
 spring:
   application:
     name: restaurant-ops
+  
+  datasource:
+    url: jdbc:postgresql://localhost:5433/restaurant_ops
+    username: restaurant_ops
+    password: restaurant_ops
+  
+  flyway:
+    enabled: true
+    locations:
+    - classpath:db/migration
+
+server:
+  port: 8080
