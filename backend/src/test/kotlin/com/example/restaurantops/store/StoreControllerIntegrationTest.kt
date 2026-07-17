@@ -116,12 +116,8 @@ class StoreControllerIntegrationTest @Autowired constructor(
             content = objectMapper.writeValueAsString(
                 mapOf("name" to name),
             )
-        }.andDo {print()}.andExpect {
+        }.andExpect {
             status { isCreated() }
         }.andReturn()
-        
-        println(result.resolvedException)
-        println(result.resolvedException?.cause)
-        println(result.resolvedException?.cause?.cause)
     }
 }
