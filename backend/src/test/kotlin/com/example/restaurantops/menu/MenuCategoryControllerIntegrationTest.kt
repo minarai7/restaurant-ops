@@ -1,6 +1,3 @@
-/**
-*AI generated and not edited yet.
-**/
 package com.example.restaurantops.menu
 
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -101,12 +98,12 @@ class MenuCategoryControllerIntegrationTest @Autowired constructor(
                 "/api/stores/$storeId/menu-categories",
             ) {
                 contentType = MediaType.APPLICATION_JSON
-                content = """
-                    {
-                      "name": "   ",
-                      "displayOrder": 10
-                    }
-                """.trimIndent()
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "   ",
+                        "displayOrder" to 10,
+                    ),
+                )
             }
             .andExpect {
                 status { isBadRequest() }
@@ -128,12 +125,12 @@ class MenuCategoryControllerIntegrationTest @Autowired constructor(
                 "/api/stores/$missingStoreId/menu-categories",
             ) {
                 contentType = MediaType.APPLICATION_JSON
-                content = """
-                    {
-                      "name": "Drinks",
-                      "displayOrder": 10
-                    }
-                """.trimIndent()
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "Drinks",
+                        "displayOrder" to 10,
+                    ),
+                )
             }
             .andExpect {
                 status { isNotFound() }
@@ -150,11 +147,11 @@ class MenuCategoryControllerIntegrationTest @Autowired constructor(
         val result = mockMvc
             .post("/api/stores") {
                 contentType = MediaType.APPLICATION_JSON
-                content = """
-                    {
-                      "name": "Menu Test ${UUID.randomUUID()}"
-                    }
-                """.trimIndent()
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "Menu Test ${UUID.randomUUID()}",
+                    ),
+                )
             }
             .andExpect {
                 status { isCreated() }
@@ -177,12 +174,12 @@ class MenuCategoryControllerIntegrationTest @Autowired constructor(
                 "/api/stores/$storeId/menu-categories",
             ) {
                 contentType = MediaType.APPLICATION_JSON
-                content = """
-                    {
-                      "name": "$name",
-                      "displayOrder": $displayOrder
-                    }
-                """.trimIndent()
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to name,
+                        "displayOrder" to displayOrder,
+                    ),
+                )
             }
             .andExpect {
                 status { isCreated() }

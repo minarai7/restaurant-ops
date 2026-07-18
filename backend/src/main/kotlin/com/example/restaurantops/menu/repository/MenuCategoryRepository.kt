@@ -80,4 +80,29 @@ class MenuCategoryRepository (
             .query(menuCategoryRowMapper)
             .list()
     }
+    
+    fun findByIdAndStoreId(
+        categoryId: UUID,
+        storeId: UUID,
+    ): MenuCategory? {
+        return jdbcClient
+            .sql(
+                """
+                SELECT
+                    id,
+                    store_id,
+                    name,
+                    display_order,
+                    created_at
+                FROM menu_categories
+                WHERE id = :categoryId
+                AND store_id = :storeId
+                """.trimIndent(),
+            )
+            .param("categoryId", categoryId)
+            .param("storeId", storeId)
+            .query(menuCategoryRowMapper)
+            .optional()
+            .orElse(null)
+    }
 }
