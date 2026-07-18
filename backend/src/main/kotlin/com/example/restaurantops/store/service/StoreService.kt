@@ -2,6 +2,7 @@ package com.example.restaurantops.store.service
 
 import com.example.restaurantops.common.error.ResourceNotFoundException
 import com.example.restaurantops.store.model.CreateStoreRequest
+import com.example.restaurantops.store.model.Store
 import com.example.restaurantops.store.model.StoreResponse
 import com.example.restaurantops.store.repository.StoreRepository
 import org.springframework.stereotype.Service
@@ -26,12 +27,14 @@ class StoreService (
             .map(StoreResponse::from)
     }
     
-    fun getStore(storeId: UUID): StoreResponse {
-        val store = storeRepository.findById(storeId)
+    fun requireStore(storeId: UUID): Store {
+        return storeRepository.findById(storeId)
             ?: throw ResourceNotFoundException(
                 message = "Store not found",
             )
-        
-        return StoreResponse.from(store)
+    }
+    
+    fun getStore(storeId: UUID): StoreResponse {
+        return StoreResponse.from(requireStore(storeId))
     }
 }

@@ -34,7 +34,7 @@ class RestaurantTableController (
         return ResponseEntity
             .created(
                 URI.create(
-                    "/api/store/$storeId/tables/${response.id}",
+                    "/api/stores/$storeId/tables/${response.id}",
                 )
             )
             .body(response)

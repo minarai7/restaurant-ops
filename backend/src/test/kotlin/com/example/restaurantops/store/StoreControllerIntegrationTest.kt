@@ -108,7 +108,6 @@ class StoreControllerIntegrationTest @Autowired constructor(
             }
         }
     }
-
     
     private fun createStore(name: String) {
         val result = mockMvc.post("/api/stores") {

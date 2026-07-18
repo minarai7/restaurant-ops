@@ -1,7 +1,7 @@
 package com.example.restaurantops.table.service
 
 import com.example.restaurantops.common.error.ResourceNotFoundException
-import com.example.restaurantops.store.repository.StoreRepository
+import com.example.restaurantops.store.service.StoreService
 import com.example.restaurantops.table.model.CreateRestaurantTableRequest
 import com.example.restaurantops.table.model.RestaurantTableResponse
 import com.example.restaurantops.table.model.TableStatus
@@ -13,13 +13,13 @@ import java.util.UUID
 @Service
 class RestaurantTableService (
     private val restaurantTableRepository: RestaurantTableRepository,
-    private val storeRepository: StoreRepository,
+    private val storeService: StoreService,
 ) {
     fun createTable(
         storeId: UUID,
         request: CreateRestaurantTableRequest,
     ): RestaurantTableResponse {
-        requireStore(storeId)
+        storeService.requireStore(storeId)
         
         val table = restaurantTableRepository.create(
             id = UUID.randomUUID(),
@@ -35,7 +35,7 @@ class RestaurantTableService (
     fun getTables(
         storeId: UUID,
     ): List<RestaurantTableResponse> {
-        requireStore(storeId)
+        storeService.requireStore(storeId)
         
         return restaurantTableRepository
             .findAllByStoreId(storeId)
@@ -47,7 +47,7 @@ class RestaurantTableService (
         tableId: UUID,
         request: UpdateRestaurantTableStatusRequest,
     ): RestaurantTableResponse {
-        requireStore(storeId)
+        storeService.requireStore(storeId)
         
         val table = restaurantTableRepository.updateStatus(
             storeId = storeId,
@@ -59,11 +59,4 @@ class RestaurantTableService (
         
         return RestaurantTableResponse.from(table)
     } 
-    
-    private fun requireStore(storeId: UUID) {
-        storeRepository.findById(storeId)
-            ?: throw ResourceNotFoundException(
-                "Store not found"
-            )
-    }
 }
