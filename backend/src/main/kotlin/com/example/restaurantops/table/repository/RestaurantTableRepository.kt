@@ -76,6 +76,32 @@ class RestaurantTableRepository (
             .single()
     }
     
+    fun findByIdAndStoreId(
+        storeId: UUID,
+        tableId: UUID,
+    ): RestaurantTable? {
+        return jdbcClient
+            .sql(
+                """
+                SELECT
+                    id,
+                    store_id,
+                    table_name,
+                    seat_count,
+                    status,
+                    created_at
+                FROM restaurant_tables
+                WHERE id = :tableId
+                AND store_id = :storeId
+                """.trimIndent(),
+            )
+            .param("tableId", tableId)
+            .param("storeId", storeId)
+            .query(tableRowMapper)
+            .optional()
+            .orElse(null)
+    }
+    
     fun findAllByStoreId(
         storeId: UUID,
     ): List<RestaurantTable> {
