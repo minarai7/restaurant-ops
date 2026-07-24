@@ -119,6 +119,34 @@ class MenuItemRepository(
             .list()
     }
 
+    fun findByIdAndStoreId(
+        id: UUID,
+        storeId: UUID,
+    ): MenuItem? {
+        return jdbcClient
+            .sql(
+                """
+                SELECT
+                    id,
+                    store_id,
+                    category_id,
+                    name,
+                    price,
+                    is_available,
+                    created_at,
+                    updated_at
+                FROM menu_items
+                WHERE id = :id
+                  AND store_id = :storeId
+                """.trimIndent(),
+            )
+            .param("id", id)
+            .param("storeId", storeId)
+            .query(menuItemRowMapper)
+            .optional()
+            .orElse(null)
+    }
+
     fun updateAvailability(
         storeId: UUID,
         menuItemId: UUID,
