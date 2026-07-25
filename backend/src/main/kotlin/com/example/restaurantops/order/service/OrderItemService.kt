@@ -10,9 +10,11 @@ import com.example.restaurantops.order.model.UpdateOrderItemRequest
 import com.example.restaurantops.order.repository.OrderItemRepository
 import com.example.restaurantops.order.repository.OrderRepository
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
 @Service
+@Transactional
 class OrderItemService(
     private val orderRepository: OrderRepository,
     private val orderItemRepository: OrderItemRepository,
@@ -23,7 +25,7 @@ class OrderItemService(
         orderId: UUID,
         request: AddOrderItemRequest,
     ): OrderItemResponse {
-        val order = orderRepository.findByIdAndStoreId(
+        val order = orderRepository.lockByIdAndStoreId(
             id = orderId,
             storeId = storeId,
         ) ?: throw ResourceNotFoundException("Order not found")
@@ -59,7 +61,7 @@ class OrderItemService(
         orderItemId: UUID,
         request: UpdateOrderItemRequest,
     ): OrderItemResponse {
-        val order = orderRepository.findByIdAndStoreId(
+        val order = orderRepository.lockByIdAndStoreId(
             id = orderId,
             storeId = storeId,
         ) ?: throw ResourceNotFoundException("Order not found")
@@ -82,7 +84,7 @@ class OrderItemService(
         orderId: UUID,
         orderItemId: UUID,
     ) {
-        val order = orderRepository.findByIdAndStoreId(
+        val order = orderRepository.lockByIdAndStoreId(
             id = orderId,
             storeId = storeId,
         ) ?: throw ResourceNotFoundException("Order not found")

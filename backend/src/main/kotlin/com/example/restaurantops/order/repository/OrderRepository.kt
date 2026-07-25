@@ -91,6 +91,53 @@ class OrderRepository(
             .orElse(null)
     }
 
+    fun lockByIdAndStoreId(
+        id: UUID,
+        storeId: UUID,
+    ): Order? {
+        return jdbcClient.sql(
+            """
+            SELECT
+                id,
+                store_id,
+                table_id,
+                status,
+                opened_at,
+                checked_out_at
+            FROM orders
+            WHERE id = :id
+              AND store_id = :storeId
+            FOR UPDATE
+            """.trimIndent(),
+        )
+            .param("id", id)
+            .param("storeId", storeId)
+            .query(orderRowMapper)
+            .optional()
+            .orElse(null)
+    }
+
+    fun updateToCheckedOut(id: UUID): Order {
+        return jdbcClient.sql(
+            """
+            UPDATE orders
+            SET status = 'CHECKED_OUT',
+                checked_out_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+            RETURNING
+                id,
+                store_id,
+                table_id,
+                status,
+                opened_at,
+                checked_out_at
+            """.trimIndent(),
+        )
+            .param("id", id)
+            .query(orderRowMapper)
+            .single()
+    }
+
     fun existsOpenByTableId(tableId: UUID): Boolean {
         return jdbcClient.sql(
             """

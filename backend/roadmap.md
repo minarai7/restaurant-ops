@@ -1,28 +1,50 @@
 # Restaurant Ops Backend Roadmap
 
-The MVP for the app Restaurant Ops Backend is:
+The completed scope of Restaurant Ops Backend is:
 
-**A backend-first restaurant operation system where store staff can manage tables, menus, orders, and checkout using Kotlin, Spring Boot, PostgreSQL, Redis, and automated integration tests.**
+**A backend-first restaurant operations and menu CMS system where store staff can manage tables, menus, orders, checkout, menu revisions, publishing schedules, and audit history using Kotlin, Spring Boot, PostgreSQL, and automated integration tests.**
 
-The main purpose of this project is not to build a complete restaurant SaaS product. The purpose is to prepare for a backend-focused internship by practicing:
+The main purpose of this project is not to build a complete restaurant SaaS product. It is to prepare for a backend-focused internship by practicing:
 
 * Kotlin and Spring Boot API development
-* PostgreSQL schema design and database constraints
+* modular backend architecture using controllers, services, and repositories
+* PostgreSQL schema design, foreign keys, checks, and unique constraints
+* partial unique indexes and deferrable constraints
+* exclusion constraints and PostgreSQL range types
 * index design and query-plan analysis
-* transaction-safe order checkout
-* transaction isolation and row-level locking
-* idempotency and duplicate-request protection
-* integration and concurrency testing
-* basic load testing and bottleneck investigation
-* Redis caching and cache invalidation
-* backend observability through logs and metrics
-* realistic restaurant operation and peak-traffic scenarios
+* transaction-safe order creation and checkout
+* transaction boundaries and rollback behavior
+* pessimistic row-level locking with `SELECT ... FOR UPDATE`
+* optimistic locking for concurrent CMS editing
+* deadlock prevention, detection, and transaction retries
+* deterministic lock ordering
+* concurrent job processing with `FOR UPDATE SKIP LOCKED`
+* immutable order-item snapshots
+* revision-based menu editing and publishing
+* scheduled menu publication
+* database-backed audit history using triggers and `JSONB`
+* integration, transaction, rollback, and concurrency testing
 
-The centerpiece feature is:
+The project has two centerpiece workflows:
 
-**An idempotent and transaction-safe restaurant checkout flow that prevents duplicate payments and preserves correct order and table state during concurrent requests and peak traffic.**
+**A transaction-safe restaurant ordering and checkout flow that prevents duplicate active orders and payments, preserves correct order and table state, and coordinates checkout with concurrent order-item modifications.**
 
-The roadmap begins with the basic restaurant operation features needed to learn Kotlin, Spring Boot, and PostgreSQL development. After those foundations are complete, the remaining tasks focus on deeper backend topics that are directly relevant to the internship, especially scalability, database consistency, concurrency, caching, testing, and performance investigation.
+**A revision-based menu CMS workflow that prevents lost updates, publishes menu changes atomically, supports scheduled publication, and records an append-only audit history.**
+
+The roadmap begins with the restaurant operation features needed to learn Kotlin, Spring Boot, PostgreSQL, database migrations, and integration testing. It then progresses into database-backed business rules and advanced backend interaction patterns.
+
+The final phases focus on:
+
+* using PostgreSQL constraints as part of the application’s correctness model
+* coordinating concurrent requests through row-level locks
+* handling stale writes with optimistic locking
+* handling deadlocks and retryable transaction failures
+* safely publishing related database changes as one atomic operation
+* processing scheduled work across multiple backend instances
+* preserving historical data through snapshots and revisions
+* recording database changes through transactional audit events
+
+By the end of Task 6.6, the project demonstrates how a Spring Boot backend and PostgreSQL can work together to enforce business rules, protect shared state under concurrency, and support realistic CMS and restaurant-operation workflows.
 
 ---
 
@@ -846,29 +868,7 @@ Save item_name_snapshot and unit_price_snapshot when the item is added.
 
 ---
 
-### Task 5.3 — Add order total calculation
-
-Create a pure Kotlin service that calculates:
-
-* subtotal
-* tax
-* total
-
-Use the order-item snapshots rather than current menu-item prices.
-
-**Test**
-
-* Subtotal is `unit_price_snapshot * quantity`.
-* Multiple items are added correctly.
-* Tax rounding is consistent.
-* Total is subtotal plus tax.
-* The calculation is covered by unit tests.
-
----
-
-## Phase 6 — Transaction-safe checkout
-
-### Task 6.1 — Implement checkout API
+### Task 5.3 — Implement atomic checkout with pessimistic locking
 
 Build:
 
@@ -884,702 +884,542 @@ Request:
 }
 ```
 
-Request header:
+Inside one service-layer transaction:
 
-```text
-Idempotency-Key: client-generated-key
-```
-
-Response:
-
-```json
-{
-  "orderId": "order-id",
-  "paymentId": "payment-id",
-  "subtotal": 4200,
-  "tax": 420,
-  "total": 4620,
-  "orderStatus": "CHECKED_OUT"
-}
-```
-
-**Test**
-
-* Valid checkout creates a payment.
-* Checkout returns the calculated amounts.
-* An empty order is rejected.
-* A missing order returns 404.
-* An order from another store is rejected.
-
----
-
-### Task 6.2 — Implement checkout transaction and row locking
-
-Run the complete checkout inside one transaction.
-
-Flow:
-
-```text
-1. Lock the order row
-
-2. Verify that the order is OPEN
-
-3. Load order items
-
-4. Calculate subtotal, tax, and total
-
-5. Insert payment
-
-6. Update order to CHECKED_OUT
-
-7. Update table status to CLOSED
-
-8. Commit
-```
-
-Use:
+1. Lock the order row:
 
 ```sql
 SELECT
     id,
     store_id,
     table_id,
-    status
+    status,
+    opened_at,
+    checked_out_at
 FROM orders
 WHERE id = :orderId
   AND store_id = :storeId
 FOR UPDATE;
 ```
 
+2. Verify the order is still `OPEN`.
+3. Calculate the total from `order_items.unit_price_snapshot`.
+4. Insert the payment.
+5. Change the order to `CHECKED_OUT`.
+6. Set `checked_out_at`.
+7. Change the table status to `CLOSED`.
+
 Add:
 
 ```sql
-UNIQUE (order_id)
+CREATE UNIQUE INDEX ux_payments_succeeded_order
+ON payments (order_id)
+WHERE status = 'SUCCEEDED';
 ```
 
-to the payments table.
+Important rule:
 
-Create a controlled exception after payment insertion to test rollback.
+```text
+Adding, updating, or deleting an order item must also lock the order row
+before checking that the order is OPEN.
+```
+
+This makes checkout and order-item modification compete for the same row lock. PostgreSQL row locks are held until the transaction finishes, while Spring’s `@Transactional` establishes the service transaction around the database operations.
 
 **Test**
 
-* Payment, order, and table changes commit together.
-* A controlled failure rolls back every change.
-* No payment remains after rollback.
-* Two simultaneous checkout attempts create one payment.
+* Checkout calculates the total from database snapshots.
+* Checkout updates the payment, order, and table atomically.
+* A failed payment insert rolls back the entire checkout.
+* Two concurrent checkout requests produce only one successful payment.
+* An item cannot be added while another transaction is completing checkout.
 * A checked-out order cannot be checked out again.
 
 ---
 
-### Task 6.3 — Add idempotency key support
-
-Use the existing `idempotency_keys` table.
-
-Store:
-
-* store_id
-* idempotency_key
-* request_hash
-* response_body
-* status
-* created_at
-
-Behavior:
-
-```text
-First request:
-
-- process checkout
-- save the response
-
-Same key with the same request:
-
-- return the saved response
-
-Same key with a different request:
-
-- return 409 Conflict
-```
-
-Protect against:
-
-* double-clicking checkout
-* retry after a slow response
-* network disconnection after checkout
-* two staff devices submitting checkout
-
-**Test**
-
-* Repeating the same request returns the same response.
-* A repeated request does not create another payment.
-* The same key with a different request returns 409.
-* Different keys still cannot create multiple payments for one order.
-* Concurrent requests with the same key create one payment.
-
----
-
-### Task 6.4 — Perform one transaction isolation experiment
-
-Add a temporary `remaining_quantity` field or create a small test-only stock table.
-
-Initial state:
-
-```text
-remaining_quantity = 1
-```
-
-Run two concurrent transactions that both attempt to purchase the last item.
-
-Compare:
-
-```text
-READ COMMITTED without locking
-
-READ COMMITTED with SELECT FOR UPDATE
-
-SERIALIZABLE
-```
-
-Record:
-
-* what each transaction reads
-* whether either transaction waits
-* whether both transactions commit
-* whether one transaction fails
-* whether retry is required
-
-Write:
-
-```text
-docs/transaction-isolation.md
-```
-
-**Test**
-
-* The concurrency scenario is reproducible.
-* Stock never becomes negative in the protected implementation.
-* You can explain the difference between row locking and isolation level.
-* You can explain which approach you would use for this scenario.
-
----
-
-### Task 6.5 — Complete checkout integration tests
-
-Write integration tests for:
-
-* successful checkout
-* correct total calculation
-* payment creation
-* order update
-* table update
-* complete rollback
-* duplicate checkout
-* repeated idempotency key
-* conflicting idempotency key
-* concurrent checkout
-
-Use PostgreSQL through Testcontainers.
-
-**Test**
-
-* All checkout integration tests pass.
-* Tests verify database rows, not only HTTP status codes.
-* The concurrency test proves that one payment is created.
-
----
-
-## Phase 7 — Peak-traffic scalability basics
-
-### Task 7.1 — Create a focused load test
-
-Use k6 or Gatling.
-
-Test:
-
-```text
-GET  /api/stores/{storeId}/menu-items
-
-POST /api/stores/{storeId}/orders/{orderId}/items
-
-POST /api/stores/{storeId}/orders/{orderId}/checkout
-```
-
-Run:
-
-```text
-10 concurrent users
-
-50 concurrent users
-
-100 concurrent users
-```
-
-Measure:
-
-* requests per second
-* p50 latency
-* p95 latency
-* error rate
-
-After the test, verify:
-
-* no duplicate payments exist
-* no invalid order states exist
-* no negative quantities exist
-
-**Test**
-
-* The load-test script can run repeatedly.
-* Results for each load level are recorded.
-* Database correctness is checked after the test.
-
----
-
-### Task 7.2 — Diagnose and improve one bottleneck
-
-Use the load-test results to identify one bottleneck.
-
-Possible examples:
-
-* missing database index
-* slow SQL
-* connection-pool exhaustion
-* lock contention
-* long transaction
-* unnecessary repeated queries
-
-Use:
-
-* `EXPLAIN ANALYZE`
-* application logs
-* HikariCP metrics
-* request latency
-
-Record:
-
-```text
-Problem
-
-Evidence
-
-Change
-
-Result
-```
-
-**Test**
-
-* One measured bottleneck is identified.
-* One change is made.
-* Before-and-after results are recorded.
-* You can explain why the change helped or did not help.
-
----
-
-### Task 7.3 — Run one peak-traffic spike test
-
-Use this pattern:
-
-```text
-20 seconds normal traffic
-
-10 seconds sudden high traffic
-
-20 seconds normal traffic
-```
-
-Observe:
-
-* latency during the spike
-* failed requests
-* database connections
-* recovery after the spike
-* checkout correctness
-
-Write a short note explaining:
-
-* which requests could return 429
-* which operations could be delayed
-* which operations must remain strongly consistent
-* why checkout must never be duplicated
-* why menu reads are easier to scale than checkout writes
-
-**Test**
-
-* The application recovers after the traffic spike.
-* Checkout remains consistent.
-* Peak behavior and limitations are documented.
-
----
-
-## Phase 8 — Redis cache basics
-
-### Task 8.1 — Cache menu-item reads
-
-Add Redis through Docker Compose.
-
-Cache:
-
-```text
-GET /api/stores/{storeId}/menu-items
-```
-
-Use cache-aside behavior:
-
-```text
-1. Read from Redis
-
-2. On cache miss, read from PostgreSQL
-
-3. Store the result with a TTL
-
-4. Return the result
-```
-
-Use a separate cache key for each store.
-
-If Redis is unavailable, fall back to PostgreSQL.
-
-**Test**
-
-* The first request reads from PostgreSQL.
-* A later request reads from Redis.
-* Different stores use different keys.
-* Redis failure does not prevent menu reads.
-* The returned data remains correct.
-
----
-
-### Task 8.2 — Implement cache invalidation
-
-When a menu item's price or availability changes:
-
-* invalidate the store's menu cache
-* allow the next request to reload current data
-
-**Test**
-
-* A menu read populates the cache.
-* Updating an item invalidates the cache.
-* The next menu read returns the updated value.
-* Stale availability is not returned after an update.
-
----
-
-## Phase 9 — Minimum observability
-
-### Task 9.1 — Add structured checkout logs
-
-Log:
-
-* request ID
-* store ID
-* order ID
-* checkout started
-* checkout succeeded
-* checkout conflict
-* idempotent response returned
-* operation duration
-
-Do not log:
-
-* full request bodies
-* sensitive customer information
-* raw credentials
-
-**Test**
-
-* Successful checkout produces useful logs.
-* Failed checkout can be followed using the request ID.
-* Concurrent requests have different request IDs.
-* Sensitive information is not present.
-
----
-
-### Task 9.2 — Add basic application metrics
-
-Use Spring Boot Actuator and Micrometer.
-
-Inspect:
-
-* HTTP request count
-* HTTP latency
-* checkout success count
-* checkout conflict count
-* HikariCP active connections
-* Redis cache hit and miss count
-
-Run the load test and inspect the metrics.
-
-**Test**
-
-* Metrics are available.
-* Checkout success and conflicts are visible.
-* Connection-pool usage is visible.
-* Metrics help explain the selected bottleneck.
-
----
-
-## Phase 10 — Code-quality automation
-
-### Task 10.1 — Add static analysis
-
-Configure:
-
-```text
-ktlint or Spotless
-
-Detekt
-```
-
-Run them through Gradle.
-
-**Test**
-
-* Formatting violations fail the check.
-* Static-analysis violations are reported.
-* Important warnings are fixed.
-* Disabled rules are documented when necessary.
-
----
-
-### Task 10.2 — Create one automated verification command
-
-Configure:
-
-```text
-./gradlew check
-```
-
-or an equivalent private CI workflow to run:
-
-* compilation
-* static analysis
-* unit tests
-* PostgreSQL integration tests
-* Redis integration tests
-
-**Test**
-
-* One command runs the complete verification process.
-* A failing unit test causes the command to fail.
-* A failing integration test causes the command to fail.
-* A static-analysis problem causes the command to fail.
-
----
-
-## Phase 11 — Store-operation review
-
-### Task 11.1 — Document important restaurant scenarios
+### Task 5.4 — Handle deadlocks and retryable transactions
 
 Create:
 
 ```text
-docs/store-scenarios.md
+common/transaction/RetryingTransactionExecutor.kt
 ```
 
-Cover:
+Use Spring `TransactionTemplate` to execute a complete transaction and retry it when PostgreSQL returns:
 
 ```text
-Staff presses checkout twice because the response is slow.
-
-Two devices attempt to check out the same table.
-
-Wi-Fi disconnects after the server processes checkout.
-
-A menu item becomes unavailable during a busy period.
-
-Redis becomes unavailable during peak traffic.
+40001 — serialization_failure
+40P01 — deadlock_detected
 ```
 
-For each scenario, write:
+Use:
 
-* what staff experience
-* what customers experience
-* technical protection
-* remaining limitation
+* maximum three attempts
+* small randomized backoff
+* logging of the SQLSTATE and attempt number
+* no HTTP calls or other external side effects inside a retryable block
 
-**Test**
+Do not retry by catching an exception inside an already failed `@Transactional` method. Retry by starting an entirely new transaction.
 
-* Each technical feature is connected to a restaurant problem.
-* Idempotency, transactions, locking, and caching are explained operationally.
-* You can explain why correctness matters during busy periods.
+Create a concurrency test that:
 
----
+1. Creates two database rows.
+2. Transaction A locks them in the order `row1 -> row2`.
+3. Transaction B locks them in the order `row2 -> row1`.
+4. Confirms PostgreSQL detects the deadlock.
+5. Confirms the retry wrapper reruns the failed transaction.
 
-## Phase 12 — Final review
+PostgreSQL expects applications to retry complete transactions after serialization failures and may also require retries after detected deadlocks.
 
-### Task 12.1 — Prepare scalability explanations
+Also record useful inspection queries in:
 
-Prepare answers for:
+```text
+docs/postgres-locking.md
+```
 
-* How would the backend react to a sudden traffic spike?
-* Why can menu reads be cached?
-* Why must checkout use PostgreSQL as the authoritative source?
-* Why are application instances usually stateless?
-* Why can PostgreSQL become a bottleneck?
-* Why are database connections limited?
-* How do indexes improve queries?
-* Why can indexes slow writes?
-* What does `SELECT FOR UPDATE` protect?
-* What do transaction isolation levels change?
-* Why is idempotency necessary?
-* How would you investigate high p95 latency?
-* How would you prevent duplicate payment during peak traffic?
+```sql
+SELECT * FROM pg_stat_activity;
+
+SELECT * FROM pg_locks;
+```
 
 **Test**
 
-* Each answer takes no more than two minutes.
-* Answers refer to experiments from this project.
-* You distinguish measured results from hypothetical large-scale design.
+* A deadlock can be reproduced intentionally.
+* One transaction is aborted instead of both requests hanging forever.
+* The retry wrapper starts a new transaction.
+* Retry exhaustion produces a controlled API error.
+* You can explain why deterministic lock ordering is preferable to relying on retries.
 
 ---
 
-### Task 12.2 — Final project check
+## Phase 6 — Menu CMS and publishing workflow
 
-Final checklist:
+### Task 6.1 — Introduce menu-item revisions
 
-* menu-item APIs work
-* order creation works
-* order-item snapshots work
-* checkout is transactional
-* checkout uses row locking
-* payment uniqueness is enforced
-* idempotency works
-* concurrent checkout creates one payment
-* isolation-level experiment is documented
-* index experiment is documented
-* load and spike tests run
-* Redis caching and invalidation work
-* logs and metrics are available
-* static analysis runs
-* automated tests pass
+Convert menu management from direct editing to a revision-based CMS model.
+
+Keep `menu_items` as the stable identity:
+
+```text
+menu_items
+
+id
+store_id
+category_id
+is_available
+created_at
+```
+
+Add:
+
+```text
+menu_item_revisions
+
+id
+menu_item_id
+store_id
+revision_number
+status
+name
+description
+price
+version
+created_by
+created_at
+published_at
+```
+
+Revision statuses:
+
+```text
+DRAFT
+PUBLISHED
+ARCHIVED
+```
+
+Add database rules:
+
+```sql
+CHECK (price >= 0)
+
+CHECK (version > 0)
+
+UNIQUE (menu_item_id, revision_number)
+```
+
+Add CMS endpoints:
+
+```text
+POST /api/stores/{storeId}/menu-items/{menuItemId}/drafts
+
+GET  /api/stores/{storeId}/menu-items/{menuItemId}/revisions
+
+GET  /api/stores/{storeId}/menu-items/{menuItemId}/draft
+```
+
+Change the ordering flow so that adding an order item loads the currently published revision. Continue storing the name and price as order-item snapshots.
 
 **Test**
 
-* The project starts from a clean database.
-* All migrations run.
-* The complete order and checkout flow works.
-* One verification command passes.
-* You can explain every protected technical feature.
+* Editing a draft does not immediately change the customer-facing menu.
+* Existing order-item snapshots remain unchanged.
+* Revision numbers cannot be duplicated.
+* A revision cannot belong to a menu item from another store.
+* Ordering fails when an item has no published revision.
 
 ---
 
-# Recommended build order
+### Task 6.2 — Add optimistic locking for CMS editing
 
-Do it in this order:
+Build:
 
-1. Phase 0 through Task 4.1
-2. minimal menu item APIs
-3. order creation
-4. order-item APIs and price snapshots
-5. order total calculation
-6. checkout API
-7. checkout transaction and row locking
-8. idempotency
-9. transaction-isolation experiment
-10. checkout integration tests
-11. menu index experiment
-12. focused load test
-13. one bottleneck improvement
-14. traffic-spike test
-15. Redis caching and invalidation
-16. structured logs and metrics
-17. static analysis and automated verification
-18. restaurant-operation review
-19. final scalability review
-20. final project check
+```text
+PATCH /api/stores/{storeId}/menu-items/{menuItemId}/draft
+```
 
-This order protects the transaction and concurrency work before optional performance and observability improvements.
+Request:
 
----
+```json
+{
+  "name": "Spicy Chicken",
+  "description": "Updated description",
+  "price": 1350,
+  "expectedVersion": 4
+}
+```
 
-# Minimal definition of “MVP finished”
+Repository update:
 
-You can say the revised MVP is finished when all of these are true:
+```sql
+UPDATE menu_item_revisions
+SET
+    name = :name,
+    description = :description,
+    price = :price,
+    version = version + 1
+WHERE menu_item_id = :menuItemId
+  AND store_id = :storeId
+  AND status = 'DRAFT'
+  AND version = :expectedVersion
+RETURNING
+    id,
+    menu_item_id,
+    store_id,
+    revision_number,
+    status,
+    name,
+    description,
+    price,
+    version,
+    created_by,
+    created_at,
+    published_at;
+```
 
-* backend is written in Kotlin and Spring Boot
-* PostgreSQL schema is managed by Flyway
-* store, table, menu, order, order-item, and checkout APIs exist
-* order items store name and price snapshots
-* checkout is transactional
-* checkout uses row-level locking
-* checkout uses an idempotency key
-* duplicate checkout does not create duplicate payment
-* a unique database constraint protects one payment per order
-* integration tests cover rollback, idempotency, and concurrent checkout
-* one transaction-isolation experiment is documented
-* one index experiment is documented
-* one repeatable load test exists
-* one measured bottleneck has been investigated
-* Redis caches menu reads and is invalidated after updates
-* logs and metrics help investigate checkout behavior
-* static analysis and automated verification run successfully
+When no row is returned:
 
----
+* return `404` if the draft does not exist
+* return `409` with code `stale_version` if the version has changed
 
-# Very important implementation rules
+Example response:
 
-Do not add another ordinary CRUD feature unless it is necessary for checkout, concurrency, indexing, caching, or load testing.
+```json
+{
+  "error": {
+    "code": "stale_version",
+    "message": "The draft was modified by another editor"
+  }
+}
+```
 
-Do not optimize before measuring.
+**Test**
 
-Do not rely only on application checks for important database invariants.
-
-Do not treat HTTP 200 as sufficient proof of data consistency.
-
-Do not postpone tests until the end of the project.
-
-The backend and database behavior are the main preparation targets.
-
----
-
-# Feature cut order if behind schedule
-
-Cut these remaining tasks first:
-
-1. Task 9.2 — Basic application metrics
-2. Task 8.2 — Detailed cache invalidation tests
-3. Task 7.3 — Peak-traffic spike test
-4. Task 9.1 — Structured checkout logging improvements
-5. Task 8.1 — Redis caching
-6. Advanced Detekt cleanup
-7. Task 11.1 — Written restaurant scenarios
-
-Protect these at all costs:
-
-1. order creation
-2. order items and price snapshots
-3. order total calculation
-4. checkout
-5. transaction rollback
-6. row locking
-7. payment uniqueness
-8. idempotency
-9. concurrent checkout testing
-10. transaction-isolation experiment
-11. index experiment
-12. basic load testing
-13. integration tests
+* Updating version `4` changes it to version `5`.
+* Two editors can load version `4`.
+* The first editor succeeds.
+* The second editor receives `409 stale_version`.
+* The second editor does not overwrite the first editor’s changes.
+* The client cannot directly select the new version number.
 
 ---
 
-# Busy day fallback plan
+### Task 6.3 — Implement atomic menu publishing
 
-On days when there is not enough time to implement a full task, do only one small action.
+Build:
 
-Examples:
+```text
+POST /api/stores/{storeId}/menu-items/{menuItemId}/publish
+```
 
-* write one repository method
-* write one integration test
-* add one database constraint
-* inspect one query with `EXPLAIN ANALYZE`
-* fix one transaction bug
-* record one load-test result
-* add one Redis integration test
-* improve one checkout log
-* update the development log
+Add:
 
-The goal of a busy day is not major progress.
+```sql
+CREATE UNIQUE INDEX ux_menu_item_published_revision
+ON menu_item_revisions (menu_item_id)
+WHERE status = 'PUBLISHED';
 
-The goal is to avoid losing context.
+CREATE UNIQUE INDEX ux_menu_item_draft_revision
+ON menu_item_revisions (menu_item_id)
+WHERE status = 'DRAFT';
+```
+
+A partial unique index is the PostgreSQL mechanism for enforcing uniqueness over only the rows matching a condition.
+
+Inside one transaction:
+
+1. Lock the `menu_items` row with `FOR UPDATE`.
+2. Load the current draft.
+3. Validate all publish-time rules.
+4. Change the current `PUBLISHED` revision to `ARCHIVED`.
+5. Change the draft to `PUBLISHED`.
+6. Set `published_at`.
+7. Create a new `DRAFT` copied from the newly published revision.
+
+Rules:
+
+* only a `DRAFT` can be published
+* at most one draft may exist
+* at most one published revision may exist
+* publishing must not expose an intermediate state with no published revision
+* concurrent publish requests must serialize on the menu-item row
+
+**Test**
+
+* Publishing makes the draft customer-visible.
+* The previous published revision becomes archived.
+* A new editable draft is created.
+* Two concurrent publish requests do not publish two revisions.
+* A failure halfway through publishing rolls back every state change.
+* Orders created before and after publication use the appropriate price snapshot.
+
+---
+
+### Task 6.4 — Implement deadlock-safe CMS reordering
+
+Build:
+
+```text
+PUT /api/stores/{storeId}/menu-categories/{categoryId}/menu-item-order
+```
+
+Request:
+
+```json
+{
+  "menuItemIds": [
+    "item-id-3",
+    "item-id-1",
+    "item-id-2"
+  ]
+}
+```
+
+Add a position column and a deferrable constraint:
+
+```sql
+ALTER TABLE menu_items
+ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE menu_items
+ADD CONSTRAINT uq_menu_items_category_position
+UNIQUE (category_id, display_order)
+DEFERRABLE INITIALLY IMMEDIATE;
+```
+
+Inside the transaction:
+
+1. Lock the category row.
+2. Validate that every submitted item belongs to that category and store.
+3. Defer the position constraint:
+
+```sql
+SET CONSTRAINTS uq_menu_items_category_position DEFERRED;
+```
+
+4. Update all positions.
+5. Let PostgreSQL validate uniqueness when the transaction commits.
+
+Deferring the constraint allows temporary duplicate positions while several rows are being rearranged, while still requiring the final committed state to be valid.
+
+Also build:
+
+```text
+PATCH /api/stores/{storeId}/menu-items/{menuItemId}/placement
+```
+
+When moving an item between categories:
+
+* lock both category rows
+* always lock them in ascending UUID order
+* renumber the source and destination categories
+* never lock them according to request order
+
+**Test**
+
+* Swapping two item positions succeeds.
+* Duplicate final positions are rejected at commit.
+* An item from another store is rejected.
+* Two concurrent reorders of the same category serialize.
+* Two concurrent cross-category moves do not deadlock.
+* Reversing the lock order in a test demonstrates why deterministic ordering matters.
+
+---
+
+### Task 6.5 — Add scheduled publishing with exclusion constraints
+
+Add:
+
+```text
+menu_publication_schedules
+
+id
+store_id
+menu_item_id
+revision_id
+active_period
+status
+created_by
+created_at
+processed_at
+```
+
+Use:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+```
+
+Store the publication interval as:
+
+```text
+active_period TSTZRANGE
+```
+
+Add:
+
+```sql
+ALTER TABLE menu_publication_schedules
+ADD CONSTRAINT ex_menu_publication_schedule_overlap
+EXCLUDE USING gist (
+    menu_item_id WITH =,
+    active_period WITH &&
+)
+WHERE (status = 'SCHEDULED');
+```
+
+This prevents overlapping scheduled publication windows for the same menu item. PostgreSQL exclusion constraints are designed to reject rows whose indexed values conflict according to operators such as range overlap.
+
+Build:
+
+```text
+POST   /api/stores/{storeId}/menu-items/{menuItemId}/publication-schedules
+
+GET    /api/stores/{storeId}/publication-schedules
+
+DELETE /api/stores/{storeId}/publication-schedules/{scheduleId}
+```
+
+Add a scheduled worker that claims due rows using:
+
+```sql
+SELECT
+    id,
+    store_id,
+    menu_item_id,
+    revision_id,
+    active_period
+FROM menu_publication_schedules
+WHERE status = 'SCHEDULED'
+  AND lower(active_period) <= CURRENT_TIMESTAMP
+ORDER BY lower(active_period), id
+FOR UPDATE SKIP LOCKED
+LIMIT 50;
+```
+
+Multiple backend instances may run the worker, but `SKIP LOCKED` prevents them from claiming the same schedule row.
+
+**Test**
+
+* A valid future schedule is created.
+* An empty or reversed time range is rejected.
+* Overlapping schedules for one item return `409`.
+* Different menu items may have overlapping schedules.
+* Two worker instances do not process the same schedule.
+* A failed publication leaves the schedule retryable.
+* Successful processing records `processed_at`.
+
+---
+
+### Task 6.6 — Add database-backed CMS audit history
+
+Add:
+
+```text
+cms_audit_events
+
+id
+store_id
+entity_type
+entity_id
+action
+before_data
+after_data
+actor_id
+request_id
+created_at
+```
+
+Use `JSONB` for:
+
+```text
+before_data
+after_data
+```
+
+At the beginning of a write transaction, set request context:
+
+```sql
+SELECT set_config('app.actor_id', :actorId, true);
+
+SELECT set_config('app.request_id', :requestId, true);
+```
+
+Create audit triggers for:
+
+```text
+menu_item_revisions
+menu_publication_schedules
+```
+
+The trigger reads:
+
+```sql
+current_setting('app.actor_id', true)
+
+current_setting('app.request_id', true)
+```
+
+Using the local form of `set_config` limits the values to the current transaction. PostgreSQL triggers execute within the same transaction as the statement that fired them, so an audit event is rolled back when the business operation is rolled back.
+
+Build:
+
+```text
+GET /api/stores/{storeId}/cms-audit-events
+```
+
+Rules:
+
+* audit rows are append-only
+* application code cannot update or delete audit rows
+* database changes are audited even when they bypass the normal service repository
+* the trigger records facts, while the service remains responsible for business decisions
+
+**Test**
+
+* Draft edits record old and new values.
+* Publishing records the status transition.
+* Rolling back an edit also rolls back its audit event.
+* A direct SQL update still creates an audit event.
+* Audit events cannot be modified through the application.
+* Audit queries cannot return another store’s events.

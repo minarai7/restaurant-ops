@@ -125,6 +125,19 @@ class OrderItemRepository(
             .orElse(null)
     }
 
+    fun sumTotalByOrderId(orderId: UUID): Int {
+        return jdbcClient.sql(
+            """
+            SELECT COALESCE(SUM(unit_price_snapshot * quantity), 0) AS total
+            FROM order_items
+            WHERE order_id = :orderId
+            """.trimIndent(),
+        )
+            .param("orderId", orderId)
+            .query(Int::class.java)
+            .single()
+    }
+
     fun delete(
         id: UUID,
         orderId: UUID,

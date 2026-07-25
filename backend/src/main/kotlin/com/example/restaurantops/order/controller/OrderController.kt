@@ -1,5 +1,7 @@
 package com.example.restaurantops.order.controller
 
+import com.example.restaurantops.order.model.CheckoutRequest
+import com.example.restaurantops.order.model.CheckoutResponse
 import com.example.restaurantops.order.model.CreateOrderRequest
 import com.example.restaurantops.order.model.OrderResponse
 import com.example.restaurantops.order.service.OrderService
@@ -48,6 +50,20 @@ class OrderController (
         return orderService.getOrder(
             storeId = storeId,
             orderId = orderId,
+        )
+    }
+
+    @PostMapping("/{orderId}/checkout")
+    @ResponseStatus(HttpStatus.OK)
+    fun checkout(
+        @PathVariable storeId: UUID,
+        @PathVariable orderId: UUID,
+        @RequestBody request: CheckoutRequest,
+    ): CheckoutResponse {
+        return orderService.checkout(
+            storeId = storeId,
+            orderId = orderId,
+            request = request,
         )
     }
 }
