@@ -23,3 +23,11 @@ class ConflictException(
     code = "conflict",
     message = message,
 )
+
+class RetryExhaustedException(
+    message: String = "Request could not be completed due to concurrent updates. Please retry.",
+) : ApiException(
+    status = HttpStatus.CONFLICT,
+    code = "conflict",
+    message = message,
+)
