@@ -1,17 +1,11 @@
 package com.example.restaurantops.common.transaction
 
 import com.example.restaurantops.common.error.RetryExhaustedException
+import com.example.restaurantops.support.AbstractIntegrationTest
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection
-import org.springframework.jdbc.core.simple.JdbcClient
-import org.springframework.test.annotation.DirtiesContext
-import org.testcontainers.junit.jupiter.Container
-import org.testcontainers.junit.jupiter.Testcontainers
-import org.testcontainers.postgresql.PostgreSQLContainer
 import java.sql.SQLException
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -19,19 +13,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
-@Testcontainers
-@SpringBootTest
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class RetryingTransactionExecutorIntegrationTest @Autowired constructor(
     private val retryingTransactionExecutor: RetryingTransactionExecutor,
-    private val jdbcClient: JdbcClient,
-) {
-    companion object {
-        @Container
-        @ServiceConnection
-        @JvmStatic
-        val postgres = PostgreSQLContainer("postgres:17")
-    }
+) : AbstractIntegrationTest() {
 
     @Test
     fun `reproduces a deadlock and recovers by retrying in a new transaction`() {
