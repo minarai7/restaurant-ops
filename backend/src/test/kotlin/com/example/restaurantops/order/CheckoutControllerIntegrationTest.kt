@@ -28,7 +28,14 @@ class CheckoutControllerIntegrationTest @Autowired constructor(
         addItem(storeId, orderId, menuItemId, quantity = 2)
 
         // Snapshot was captured at 1000; the later price change must be ignored.
-        jdbcClient.sql("UPDATE menu_items SET price = 5000 WHERE id = :id")
+        jdbcClient.sql(
+            """
+            UPDATE menu_item_revisions
+            SET price = 5000
+            WHERE menu_item_id = :id
+              AND status = 'PUBLISHED'
+            """.trimIndent(),
+        )
             .param("id", menuItemId)
             .update()
 
@@ -268,9 +275,11 @@ class CheckoutControllerIntegrationTest @Autowired constructor(
             .andReturn()
             .response
 
-        return UUID.fromString(
+        val menuItemId = UUID.fromString(
             objectMapper.readTree(result.contentAsString).path("id").asString(),
         )
+        publishDraftRevision(menuItemId)
+        return menuItemId
     }
 
     private fun createOrder(storeId: UUID, tableId: UUID): UUID {

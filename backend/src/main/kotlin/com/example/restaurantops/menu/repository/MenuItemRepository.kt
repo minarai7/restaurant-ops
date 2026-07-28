@@ -26,8 +26,6 @@ class MenuItemRepository(
                     "category_id",
                     UUID::class.java,
                 ),
-                name = resultSet.getString("name"),
-                price = resultSet.getInt("price"),
                 isAvailable = resultSet.getBoolean(
                     "is_available",
                 ),
@@ -44,8 +42,6 @@ class MenuItemRepository(
         id: UUID,
         storeId: UUID,
         categoryId: UUID,
-        name: String,
-        price: Int,
         isAvailable: Boolean,
     ): MenuItem {
         return jdbcClient
@@ -55,8 +51,6 @@ class MenuItemRepository(
                     id,
                     store_id,
                     category_id,
-                    name,
-                    price,
                     is_available,
                     created_at,
                     updated_at
@@ -65,8 +59,6 @@ class MenuItemRepository(
                     :id,
                     :storeId,
                     :categoryId,
-                    :name,
-                    :price,
                     :isAvailable,
                     CURRENT_TIMESTAMP,
                     CURRENT_TIMESTAMP
@@ -75,8 +67,6 @@ class MenuItemRepository(
                     id,
                     store_id,
                     category_id,
-                    name,
-                    price,
                     is_available,
                     created_at,
                     updated_at
@@ -85,8 +75,6 @@ class MenuItemRepository(
             .param("id", id)
             .param("storeId", storeId)
             .param("categoryId", categoryId)
-            .param("name", name)
-            .param("price", price)
             .param("isAvailable", isAvailable)
             .query(menuItemRowMapper)
             .single()
@@ -102,8 +90,6 @@ class MenuItemRepository(
                     id,
                     store_id,
                     category_id,
-                    name,
-                    price,
                     is_available,
                     created_at,
                     updated_at
@@ -130,8 +116,6 @@ class MenuItemRepository(
                     id,
                     store_id,
                     category_id,
-                    name,
-                    price,
                     is_available,
                     created_at,
                     updated_at
@@ -165,8 +149,6 @@ class MenuItemRepository(
                     id,
                     store_id,
                     category_id,
-                    name,
-                    price,
                     is_available,
                     created_at,
                     updated_at

@@ -63,17 +63,63 @@ class MenuItemControllerIntegrationTest @Autowired constructor(
             menuItem.path("categoryId").asString(),
         )
         assertEquals(
-            "Chicken Curry",
-            menuItem.path("name").asString(),
-        )
-        assertEquals(
-            1200,
-            menuItem.path("price").asInt(),
-        )
-        assertEquals(
             true,
             menuItem.path("isAvailable").asBoolean(),
         )
+    }
+
+    @Test
+    fun `creating a menu item also creates its first draft revision`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Green Curry",
+            price = 950,
+        )
+
+        mockMvc
+            .get("/api/stores/$storeId/menu-items/$menuItemId/draft")
+            .andExpect {
+                status { isOk() }
+                jsonPath("$.menuItemId") { value(menuItemId) }
+                jsonPath("$.revisionNumber") { value(1) }
+                jsonPath("$.status") { value("DRAFT") }
+                jsonPath("$.name") { value("Green Curry") }
+                jsonPath("$.price") { value(950) }
+            }
+
+        mockMvc
+            .get("/api/stores/$storeId/menu-items/$menuItemId/revisions")
+            .andExpect {
+                status { isOk() }
+                jsonPath("$.length()") { value(1) }
+                jsonPath("$[0].revisionNumber") { value(1) }
+            }
+    }
+
+    @Test
+    fun `draft for a menu item from another store is rejected`() {
+        val storeId = createStore()
+        val anotherStoreId = createStore()
+        val categoryId = createMenuCategory(storeId)
+
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Fried Rice",
+            price = 850,
+        )
+
+        mockMvc
+            .get("/api/stores/$anotherStoreId/menu-items/$menuItemId/draft")
+            .andExpect {
+                status { isNotFound() }
+                jsonPath("$.error.code") { value("not_found") }
+                jsonPath("$.error.message") { value("Menu item not found") }
+            }
     }
 
     @Test
@@ -206,40 +252,6 @@ class MenuItemControllerIntegrationTest @Autowired constructor(
             }
     }
 
-    @Test
-    fun `duplicate menu item name in same store is rejected`() {
-        val storeId = createStore()
-        val categoryId = createMenuCategory(storeId)
-
-        createMenuItem(
-            storeId = storeId,
-            categoryId = categoryId,
-            name = "House Salad",
-            price = 700,
-        )
-
-        mockMvc
-            .post("/api/stores/$storeId/menu-items") {
-                contentType = MediaType.APPLICATION_JSON
-                content = objectMapper.writeValueAsString(
-                    mapOf(
-                        "categoryId" to categoryId,
-                        "name" to "House Salad",
-                        "price" to 900,
-                    ),
-                )
-            }
-            .andExpect {
-                status { isConflict() }
-                jsonPath("$.error.code") {
-                    value("conflict")
-                }
-                jsonPath("$.error.message") {
-                    value("Menu item name already exists")
-                }
-            }
-    }
-
     private fun createStore(): String {
         val result = mockMvc
             .post("/api/stores") {
@@ -311,12 +323,6 @@ class MenuItemControllerIntegrationTest @Autowired constructor(
                 }
                 jsonPath("$.categoryId") {
                     value(categoryId)
-                }
-                jsonPath("$.name") {
-                    value(name)
-                }
-                jsonPath("$.price") {
-                    value(price)
                 }
                 jsonPath("$.isAvailable") {
                     value(true)

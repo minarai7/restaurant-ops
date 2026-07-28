@@ -83,7 +83,14 @@ class OrderItemControllerIntegrationTest @Autowired constructor(
 
         val orderItemId = addItem(storeId, orderId, menuItemId, quantity = 1)
 
-        jdbcClient.sql("UPDATE menu_items SET price = 9999 WHERE id = :id")
+        jdbcClient.sql(
+            """
+            UPDATE menu_item_revisions
+            SET price = 9999
+            WHERE menu_item_id = :id
+              AND status = 'PUBLISHED'
+            """.trimIndent(),
+        )
             .param("id", menuItemId)
             .update()
 
@@ -160,6 +167,46 @@ class OrderItemControllerIntegrationTest @Autowired constructor(
                 status { isConflict() }
                 jsonPath("$.error.code") { value("conflict") }
                 jsonPath("$.error.message") { value("Menu item is not available") }
+            }
+    }
+
+    @Test
+    fun `ordering fails when the menu item has no published revision`() {
+        val storeId = createStore()
+        val tableId = createTable(storeId)
+        val categoryId = createMenuCategory(storeId)
+        val orderId = createOrder(storeId, tableId)
+
+        val result = mockMvc.post("/api/stores/$storeId/menu-items") {
+            contentType = MediaType.APPLICATION_JSON
+            content = objectMapper.writeValueAsString(
+                mapOf(
+                    "categoryId" to categoryId,
+                    "name" to "Unpublished Curry",
+                    "price" to 1000,
+                ),
+            )
+        }
+            .andExpect { status { isCreated() } }
+            .andReturn()
+            .response
+        val menuItemId = UUID.fromString(
+            objectMapper.readTree(result.contentAsString).path("id").asString(),
+        )
+
+        mockMvc.post("/api/stores/$storeId/orders/$orderId/items") {
+            contentType = MediaType.APPLICATION_JSON
+            content = objectMapper.writeValueAsString(
+                mapOf(
+                    "menuItemId" to menuItemId,
+                    "quantity" to 1,
+                ),
+            )
+        }
+            .andExpect {
+                status { isConflict() }
+                jsonPath("$.error.code") { value("conflict") }
+                jsonPath("$.error.message") { value("Menu item has no published revision") }
             }
     }
 
@@ -353,9 +400,11 @@ class OrderItemControllerIntegrationTest @Autowired constructor(
             .andReturn()
             .response
 
-        return UUID.fromString(
+        val menuItemId = UUID.fromString(
             objectMapper.readTree(result.contentAsString).path("id").asString(),
         )
+        publishDraftRevision(menuItemId)
+        return menuItemId
     }
 
     private fun createOrder(storeId: UUID, tableId: UUID): UUID {

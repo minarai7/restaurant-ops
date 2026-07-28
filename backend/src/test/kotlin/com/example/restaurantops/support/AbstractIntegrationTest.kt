@@ -6,6 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.simple.JdbcClient
+import java.util.UUID
 
 /**
  * Base class for all integration tests. Boots the full application context once,
@@ -51,5 +52,24 @@ abstract class AbstractIntegrationTest {
         """.trimIndent()
         
         jdbcClient.sql(truncateSql).update()
+    }
+
+    /**
+     * Publishing is implemented in Task 6.3. Until then, tests that need an
+     * orderable menu item promote its draft directly via SQL.
+     */
+    protected fun publishDraftRevision(menuItemId: UUID) {
+        jdbcClient.sql(
+            """
+            UPDATE menu_item_revisions
+            SET
+                status = 'PUBLISHED',
+                published_at = CURRENT_TIMESTAMP
+            WHERE menu_item_id = :menuItemId
+              AND status = 'DRAFT'
+            """.trimIndent(),
+        )
+            .param("menuItemId", menuItemId)
+            .update()
     }
 }

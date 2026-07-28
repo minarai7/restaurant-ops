@@ -3,6 +3,7 @@ package com.example.restaurantops.order.service
 import com.example.restaurantops.common.error.ConflictException
 import com.example.restaurantops.common.error.ResourceNotFoundException
 import com.example.restaurantops.menu.repository.MenuItemRepository
+import com.example.restaurantops.menu.repository.MenuItemRevisionRepository
 import com.example.restaurantops.order.model.AddOrderItemRequest
 import com.example.restaurantops.order.model.OrderItemResponse
 import com.example.restaurantops.order.model.OrderStatus
@@ -19,6 +20,7 @@ class OrderItemService(
     private val orderRepository: OrderRepository,
     private val orderItemRepository: OrderItemRepository,
     private val menuItemRepository: MenuItemRepository,
+    private val menuItemRevisionRepository: MenuItemRevisionRepository,
 ) {
     fun addItem(
         storeId: UUID,
@@ -43,12 +45,17 @@ class OrderItemService(
             throw ConflictException("Menu item is not available")
         }
 
+        val publishedMenuItem = menuItemRevisionRepository.findPublishedByMenuItemIdAndStoreId(
+            menuItemId = menuItem.id,
+            storeId = storeId,
+        ) ?: throw ConflictException("Menu item has no published revision")
+
         val orderItem = orderItemRepository.add(
             id = UUID.randomUUID(),
             orderId = orderId,
             menuItemId = menuItem.id,
-            itemNameSnapshot = menuItem.name,
-            unitPriceSnapshot = menuItem.price,
+            itemNameSnapshot = publishedMenuItem.name,
+            unitPriceSnapshot = publishedMenuItem.price,
             quantity = request.quantity,
         )
 
