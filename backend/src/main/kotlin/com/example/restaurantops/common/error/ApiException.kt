@@ -24,6 +24,14 @@ class ConflictException(
     message = message,
 )
 
+class StaleVersionException(
+    message: String,
+) : ApiException(
+    status = HttpStatus.CONFLICT,
+    code = "stale_version",
+    message = message,
+)
+
 class RetryExhaustedException(
     message: String = "Request could not be completed due to concurrent updates. Please retry.",
 ) : ApiException(

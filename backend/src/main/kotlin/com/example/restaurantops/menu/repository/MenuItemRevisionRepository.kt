@@ -199,6 +199,52 @@ class MenuItemRevisionRepository(
             .orElse(null)
     }
 
+    fun updateDraft(
+        storeId: UUID,
+        menuItemId: UUID,
+        name: String,
+        description: String?,
+        price: Int,
+        expectedVersion: Int,
+    ): MenuItemRevision? {
+        return jdbcClient
+            .sql(
+                """
+                UPDATE menu_item_revisions
+                SET name = :name,
+                    description = :description,
+                    price = :price,
+                    version = version + 1
+                WHERE menu_item_id = :menuItemId
+                  AND store_id = :storeId
+                  AND status = 'DRAFT'
+                  AND version = :expectedVersion
+                RETURNING
+                    id,
+                    menu_item_id,
+                    store_id,
+                    revision_number,
+                    status,
+                    name,
+                    description,
+                    price,
+                    version,
+                    created_by,
+                    created_at,
+                    published_at
+                """.trimIndent(),
+            )
+            .param("name", name)
+            .param("description", description)
+            .param("price", price)
+            .param("menuItemId", menuItemId)
+            .param("storeId", storeId)
+            .param("expectedVersion", expectedVersion)
+            .query(rowMapper)
+            .optional()
+            .orElse(null)
+    }
+
     fun findPublishedByMenuItemIdAndStoreId(
         menuItemId: UUID,
         storeId: UUID,

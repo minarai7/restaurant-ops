@@ -2,8 +2,10 @@ package com.example.restaurantops.menu.service
 
 import com.example.restaurantops.common.error.ConflictException
 import com.example.restaurantops.common.error.ResourceNotFoundException
+import com.example.restaurantops.common.error.StaleVersionException
 import com.example.restaurantops.menu.model.CreateMenuItemDraftRequest
 import com.example.restaurantops.menu.model.MenuItemRevisionResponse
+import com.example.restaurantops.menu.model.UpdateMenuItemDraftRequest
 import com.example.restaurantops.menu.repository.MenuItemRepository
 import com.example.restaurantops.menu.repository.MenuItemRevisionRepository
 import org.springframework.stereotype.Service
@@ -67,6 +69,35 @@ class MenuItemRevisionService(
             )
 
         return MenuItemRevisionResponse.from(draft)
+    }
+
+    @Transactional
+    fun updateDraft(
+        storeId: UUID,
+        menuItemId: UUID,
+        request: UpdateMenuItemDraftRequest,
+    ): MenuItemRevisionResponse {
+        requireMenuItem(storeId, menuItemId)
+
+        val updated = menuItemRevisionRepository.updateDraft(
+            storeId = storeId,
+            menuItemId = menuItemId,
+            name = request.name.trim(),
+            description = request.description?.trim(),
+            price = request.price,
+            expectedVersion = requireNotNull(request.expectedVersion),
+        )
+
+        if (updated != null) {
+            return MenuItemRevisionResponse.from(updated)
+        }
+        
+        val draft = menuItemRevisionRepository.findDraftByMenuItemIdAndStoreId(
+            menuItemId,
+            storeId,
+        ) ?: throw ResourceNotFoundException("Draft not found")
+        
+        throw StaleVersionException("Draft has been updated by another user")
     }
 
     private fun requireMenuItem(

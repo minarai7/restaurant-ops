@@ -2,11 +2,13 @@ package com.example.restaurantops.menu.controller
 
 import com.example.restaurantops.menu.model.CreateMenuItemDraftRequest
 import com.example.restaurantops.menu.model.MenuItemRevisionResponse
+import com.example.restaurantops.menu.model.UpdateMenuItemDraftRequest
 import com.example.restaurantops.menu.service.MenuItemRevisionService
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -61,6 +63,19 @@ class MenuItemRevisionController(
         return menuItemRevisionService.getDraft(
             storeId = storeId,
             menuItemId = menuItemId,
+        )
+    }
+
+    @PatchMapping("/draft")
+    fun updateDraft(
+        @PathVariable storeId: UUID,
+        @PathVariable menuItemId: UUID,
+        @Valid @RequestBody request: UpdateMenuItemDraftRequest,
+    ): MenuItemRevisionResponse {
+        return menuItemRevisionService.updateDraft(
+            storeId = storeId,
+            menuItemId = menuItemId,
+            request = request,
         )
     }
 }

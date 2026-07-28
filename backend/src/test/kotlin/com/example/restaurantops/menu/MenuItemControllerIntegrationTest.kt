@@ -123,6 +123,165 @@ class MenuItemControllerIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `update draft bumps version and returns updated fields`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Spicy Chicken",
+            price = 1200,
+        )
+
+        mockMvc
+            .patch("/api/stores/$storeId/menu-items/$menuItemId/draft") {
+                contentType = MediaType.APPLICATION_JSON
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "Spicy Chicken",
+                        "description" to "Updated description",
+                        "price" to 1350,
+                        "expectedVersion" to 1,
+                    ),
+                )
+            }
+            .andExpect {
+                status { isOk() }
+                jsonPath("$.name") { value("Spicy Chicken") }
+                jsonPath("$.description") { value("Updated description") }
+                jsonPath("$.price") { value(1350) }
+                jsonPath("$.version") { value(2) }
+            }
+    }
+
+    @Test
+    fun `update draft with stale expectedVersion returns 409 stale_version`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Spicy Chicken",
+            price = 1200,
+        )
+
+        mockMvc
+            .patch("/api/stores/$storeId/menu-items/$menuItemId/draft") {
+                contentType = MediaType.APPLICATION_JSON
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "Spicy Chicken",
+                        "price" to 1300,
+                        "expectedVersion" to 1,
+                    ),
+                )
+            }
+            .andExpect {
+                status { isOk() }
+            }
+
+        mockMvc
+            .patch("/api/stores/$storeId/menu-items/$menuItemId/draft") {
+                contentType = MediaType.APPLICATION_JSON
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "Spicy Chicken",
+                        "price" to 1400,
+                        "expectedVersion" to 1,
+                    ),
+                )
+            }
+            .andExpect {
+                status { isConflict() }
+                jsonPath("$.error.code") { value("stale_version") }
+            }
+    }
+
+    @Test
+    fun `update draft for nonexistent menu item returns 404`() {
+        val storeId = createStore()
+
+        mockMvc
+            .patch("/api/stores/$storeId/menu-items/${UUID.randomUUID()}/draft") {
+                contentType = MediaType.APPLICATION_JSON
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "Spicy Chicken",
+                        "price" to 1300,
+                        "expectedVersion" to 1,
+                    ),
+                )
+            }
+            .andExpect {
+                status { isNotFound() }
+                jsonPath("$.error.code") { value("not_found") }
+                jsonPath("$.error.message") { value("Menu item not found") }
+            }
+    }
+
+    @Test
+    fun `update draft with blank name is rejected`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Spicy Chicken",
+            price = 1200,
+        )
+
+        mockMvc
+            .patch("/api/stores/$storeId/menu-items/$menuItemId/draft") {
+                contentType = MediaType.APPLICATION_JSON
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "   ",
+                        "price" to 1300,
+                        "expectedVersion" to 1,
+                    ),
+                )
+            }
+            .andExpect {
+                status { isBadRequest() }
+                jsonPath("$.error.code") { value("invalid_input") }
+                jsonPath("$.error.message") { value("Name must not be blank") }
+            }
+    }
+
+    @Test
+    fun `update draft with negative price is rejected`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Spicy Chicken",
+            price = 1200,
+        )
+
+        mockMvc
+            .patch("/api/stores/$storeId/menu-items/$menuItemId/draft") {
+                contentType = MediaType.APPLICATION_JSON
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "Spicy Chicken",
+                        "price" to -1,
+                        "expectedVersion" to 1,
+                    ),
+                )
+            }
+            .andExpect {
+                status { isBadRequest() }
+                jsonPath("$.error.code") { value("invalid_input") }
+                jsonPath("$.error.message") { value("Price must be zero or greater") }
+            }
+    }
+
+    @Test
     fun `negative menu item price is rejected`() {
         val storeId = createStore()
         val categoryId = createMenuCategory(storeId)
