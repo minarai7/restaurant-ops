@@ -105,6 +105,41 @@ class OrderItemControllerIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `orders keep the price snapshot from the revision published when they were placed`() {
+        val storeId = createStore()
+        val tableId = createTable(storeId)
+        val categoryId = createMenuCategory(storeId)
+        val menuItemId = createMenuItem(storeId, categoryId, "Panang Curry", 1000)
+        val orderId = createOrder(storeId, tableId)
+
+        val firstOrderItemId = addItem(storeId, orderId, menuItemId, quantity = 1)
+
+        mockMvc.post("/api/stores/$storeId/menu-items/$menuItemId/drafts") {
+            contentType = MediaType.APPLICATION_JSON
+            content = objectMapper.writeValueAsString(
+                mapOf(
+                    "name" to "Panang Curry",
+                    "price" to 1250,
+                ),
+            )
+        }
+            .andExpect { status { isCreated() } }
+
+        mockMvc.post("/api/stores/$storeId/menu-items/$menuItemId/publish") {
+            contentType = MediaType.APPLICATION_JSON
+            content = objectMapper.writeValueAsString(
+                mapOf("expectedVersion" to 1),
+            )
+        }
+            .andExpect { status { isOk() } }
+
+        val secondOrderItemId = addItem(storeId, orderId, menuItemId, quantity = 1)
+
+        assertThat(unitPriceSnapshot(firstOrderItemId)).isEqualTo(1000)
+        assertThat(unitPriceSnapshot(secondOrderItemId)).isEqualTo(1250)
+    }
+
+    @Test
     fun `updates item quantity`() {
         val storeId = createStore()
         val tableId = createTable(storeId)
@@ -459,6 +494,15 @@ class OrderItemControllerIntegrationTest @Autowired constructor(
             "SELECT COUNT(*) FROM order_items WHERE order_id = :orderId",
         )
             .param("orderId", orderId)
+            .query(Int::class.java)
+            .single()
+    }
+
+    private fun unitPriceSnapshot(orderItemId: UUID): Int {
+        return jdbcClient.sql(
+            "SELECT unit_price_snapshot FROM order_items WHERE id = :id",
+        )
+            .param("id", orderItemId)
             .query(Int::class.java)
             .single()
     }

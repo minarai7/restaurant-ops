@@ -1,6 +1,10 @@
 package com.example.restaurantops.menu
 
+import com.example.restaurantops.menu.model.PublishMenuItemRequest
+import com.example.restaurantops.menu.service.MenuItemRevisionService
 import com.example.restaurantops.support.AbstractIntegrationTest
+import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -9,12 +13,19 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.support.TransactionTemplate
 import tools.jackson.databind.ObjectMapper
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class MenuItemControllerIntegrationTest @Autowired constructor(
     private val mockMvc: MockMvc,
     private val objectMapper: ObjectMapper,
+    private val menuItemRevisionService: MenuItemRevisionService,
+    private val transactionManager: PlatformTransactionManager,
 ) : AbstractIntegrationTest() {
 
     @Test
@@ -282,6 +293,257 @@ class MenuItemControllerIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `publishing a draft makes it published and opens a fresh draft`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Green Curry",
+            price = 950,
+        )
+
+        publish(storeId, menuItemId, expectedVersion = 1)
+            .andExpect {
+                status { isOk() }
+                jsonPath("$.status") { value("PUBLISHED") }
+                jsonPath("$.revisionNumber") { value(1) }
+                jsonPath("$.version") { value(1) }
+                jsonPath("$.publishedAt") { exists() }
+            }
+
+        mockMvc
+            .get("/api/stores/$storeId/menu-items/$menuItemId/draft")
+            .andExpect {
+                status { isOk() }
+                jsonPath("$.revisionNumber") { value(2) }
+                jsonPath("$.version") { value(2) }
+                jsonPath("$.status") { value("DRAFT") }
+            }
+
+        mockMvc
+            .get("/api/stores/$storeId/menu-items/$menuItemId/revisions")
+            .andExpect {
+                status { isOk() }
+                jsonPath("$.length()") { value(2) }
+            }
+    }
+
+    @Test
+    fun `publishing again archives the previous published revision`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Spicy Chicken",
+            price = 1200,
+        )
+
+        publish(storeId, menuItemId, expectedVersion = 1)
+            .andExpect { status { isOk() } }
+
+        mockMvc
+            .patch("/api/stores/$storeId/menu-items/$menuItemId/draft") {
+                contentType = MediaType.APPLICATION_JSON
+                content = objectMapper.writeValueAsString(
+                    mapOf(
+                        "name" to "Extra Spicy Chicken",
+                        "price" to 1350,
+                        "expectedVersion" to 2,
+                    ),
+                )
+            }
+            .andExpect { status { isOk() } }
+
+        publish(storeId, menuItemId, expectedVersion = 3)
+            .andExpect { status { isOk() } }
+
+        val result = mockMvc
+            .get("/api/stores/$storeId/menu-items/$menuItemId/revisions")
+            .andExpect {
+                status { isOk() }
+                jsonPath("$.length()") { value(3) }
+            }
+            .andReturn()
+
+        val revisions = objectMapper.readTree(result.response.contentAsString)
+        assertEquals("ARCHIVED", revisions.path(0).path("status").asString())
+        assertEquals("PUBLISHED", revisions.path(1).path("status").asString())
+        assertEquals("DRAFT", revisions.path(2).path("status").asString())
+    }
+
+    @Test
+    fun `publishing with a stale expectedVersion returns 409 stale_version`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Spicy Chicken",
+            price = 1200,
+        )
+
+        publish(storeId, menuItemId, expectedVersion = 1)
+            .andExpect { status { isOk() } }
+
+        publish(storeId, menuItemId, expectedVersion = 1)
+            .andExpect {
+                status { isConflict() }
+                jsonPath("$.error.code") { value("stale_version") }
+            }
+
+        assertEquals(
+            "PUBLISHED",
+            publishedRevisionStatus(menuItemId),
+        )
+    }
+
+    @Test
+    fun `publish for a menu item from another store returns 404`() {
+        val storeId = createStore()
+        val anotherStoreId = createStore()
+        val categoryId = createMenuCategory(storeId)
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Fried Rice",
+            price = 850,
+        )
+
+        publish(anotherStoreId, menuItemId, expectedVersion = 1)
+            .andExpect {
+                status { isNotFound() }
+                jsonPath("$.error.code") { value("not_found") }
+                jsonPath("$.error.message") { value("Menu item not found") }
+            }
+    }
+
+    @Test
+    fun `publish with no draft returns 404`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Fried Rice",
+            price = 850,
+        )
+
+        jdbcClient.sql("DELETE FROM menu_item_revisions WHERE menu_item_id = :menuItemId")
+            .param("menuItemId", UUID.fromString(menuItemId))
+            .update()
+
+        publish(storeId, menuItemId, expectedVersion = 1)
+            .andExpect {
+                status { isNotFound() }
+                jsonPath("$.error.code") { value("not_found") }
+                jsonPath("$.error.message") { value("Menu item has no draft") }
+            }
+    }
+
+    @Test
+    fun `two concurrent publish requests publish only one revision`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Fried Rice",
+            price = 850,
+        )
+
+        val executor = Executors.newFixedThreadPool(2)
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+
+        try {
+            val futures = (1..2).map {
+                executor.submit<Int> {
+                    ready.countDown()
+                    start.await()
+                    publish(storeId, menuItemId, expectedVersion = 1)
+                        .andReturn()
+                        .response
+                        .status
+                }
+            }
+
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue()
+            start.countDown()
+
+            val statuses = futures.map { it.get(10, TimeUnit.SECONDS) }
+            assertThat(statuses).containsExactlyInAnyOrder(200, 409)
+        } finally {
+            executor.shutdownNow()
+        }
+
+        assertEquals(
+            1,
+            jdbcClient.sql(
+                "SELECT COUNT(*) FROM menu_item_revisions " +
+                    "WHERE menu_item_id = :menuItemId AND status = 'PUBLISHED'",
+            )
+                .param("menuItemId", UUID.fromString(menuItemId))
+                .query(Int::class.java)
+                .single(),
+        )
+        assertEquals(
+            2,
+            jdbcClient.sql(
+                "SELECT COUNT(*) FROM menu_item_revisions WHERE menu_item_id = :menuItemId",
+            )
+                .param("menuItemId", UUID.fromString(menuItemId))
+                .query(Int::class.java)
+                .single(),
+        )
+    }
+
+    @Test
+    fun `a partially failed publish rolls back every state change`() {
+        val storeId = createStore()
+        val categoryId = createMenuCategory(storeId)
+        val menuItemId = createMenuItem(
+            storeId = storeId,
+            categoryId = categoryId,
+            name = "Fried Rice",
+            price = 850,
+        )
+
+        val transactionTemplate = TransactionTemplate(transactionManager)
+
+        assertThatThrownBy {
+            transactionTemplate.execute {
+                menuItemRevisionService.publish(
+                    storeId = UUID.fromString(storeId),
+                    menuItemId = UUID.fromString(menuItemId),
+                    request = PublishMenuItemRequest(expectedVersion = 1),
+                )
+                throw RuntimeException("simulated failure after publish")
+            }
+        }.isInstanceOf(RuntimeException::class.java)
+
+        assertEquals(
+            1,
+            jdbcClient.sql(
+                "SELECT COUNT(*) FROM menu_item_revisions WHERE menu_item_id = :menuItemId",
+            )
+                .param("menuItemId", UUID.fromString(menuItemId))
+                .query(Int::class.java)
+                .single(),
+        )
+        assertEquals(
+            "DRAFT",
+            jdbcClient.sql(
+                "SELECT status FROM menu_item_revisions WHERE menu_item_id = :menuItemId",
+            )
+                .param("menuItemId", UUID.fromString(menuItemId))
+                .query(String::class.java)
+                .single(),
+        )
+    }
+
+    @Test
     fun `negative menu item price is rejected`() {
         val storeId = createStore()
         val categoryId = createMenuCategory(storeId)
@@ -502,5 +764,34 @@ class MenuItemControllerIntegrationTest @Autowired constructor(
             .readTree(result.response.contentAsString)
             .path("id")
             .asString()
+    }
+
+    private fun publish(
+        storeId: String,
+        menuItemId: String,
+        expectedVersion: Int,
+    ) = mockMvc.post("/api/stores/$storeId/menu-items/$menuItemId/publish") {
+        contentType = MediaType.APPLICATION_JSON
+        content = objectMapper.writeValueAsString(
+            mapOf(
+                "expectedVersion" to expectedVersion,
+            ),
+        )
+    }
+
+    private fun publishedRevisionStatus(menuItemId: String): String {
+        return jdbcClient.sql(
+            """
+            SELECT status
+            FROM menu_item_revisions
+            WHERE menu_item_id = :menuItemId
+              AND status != 'DRAFT'
+            ORDER BY revision_number DESC
+            LIMIT 1
+            """.trimIndent(),
+        )
+            .param("menuItemId", UUID.fromString(menuItemId))
+            .query(String::class.java)
+            .single()
     }
 }

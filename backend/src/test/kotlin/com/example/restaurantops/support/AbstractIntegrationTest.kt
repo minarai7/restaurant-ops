@@ -55,8 +55,9 @@ abstract class AbstractIntegrationTest {
     }
 
     /**
-     * Publishing is implemented in Task 6.3. Until then, tests that need an
-     * orderable menu item promote its draft directly via SQL.
+     * Shortcut for tests that only need an orderable menu item and don't care
+     * about exercising the CMS publish workflow itself. Promotes a draft
+     * directly via SQL instead of going through POST .../publish.
      */
     protected fun publishDraftRevision(menuItemId: UUID) {
         jdbcClient.sql(

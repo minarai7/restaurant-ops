@@ -5,6 +5,7 @@ import com.example.restaurantops.common.error.ResourceNotFoundException
 import com.example.restaurantops.common.error.StaleVersionException
 import com.example.restaurantops.menu.model.CreateMenuItemDraftRequest
 import com.example.restaurantops.menu.model.MenuItemRevisionResponse
+import com.example.restaurantops.menu.model.PublishMenuItemRequest
 import com.example.restaurantops.menu.model.UpdateMenuItemDraftRequest
 import com.example.restaurantops.menu.repository.MenuItemRepository
 import com.example.restaurantops.menu.repository.MenuItemRevisionRepository
@@ -98,6 +99,57 @@ class MenuItemRevisionService(
         ) ?: throw ResourceNotFoundException("Draft not found")
         
         throw StaleVersionException("Draft has been updated by another user")
+    }
+
+    @Transactional
+    fun publish(
+        storeId: UUID,
+        menuItemId: UUID,
+        request: PublishMenuItemRequest,
+    ): MenuItemRevisionResponse {
+        // Locked in this fixed order (menu_items, then the draft revision) so that
+        // two concurrent publish calls can never deadlock against each other.
+        menuItemRepository.lockByIdAndStoreId(
+            id = menuItemId,
+            storeId = storeId,
+        ) ?: throw ResourceNotFoundException(
+            message = "Menu item not found",
+        )
+
+        val draft = menuItemRevisionRepository.lockDraftByMenuItemIdAndStoreId(
+            menuItemId = menuItemId,
+            storeId = storeId,
+        ) ?: throw ResourceNotFoundException(
+            message = "Menu item has no draft",
+        )
+        
+        if (draft.version != request.expectedVersion) {
+            throw StaleVersionException(
+                message = "Draft has been updated by another user"
+            )
+        }
+        
+        menuItemRevisionRepository.archivePublished(
+            menuItemId = menuItemId,
+            storeId = storeId,
+        )
+        
+        val published = menuItemRevisionRepository.publishDraft(
+            id = draft.id
+        )
+        
+        menuItemRevisionRepository.createDraft(
+            id = UUID.randomUUID(),
+            menuItemId = menuItemId,
+            storeId = storeId,
+            name = published.name,
+            description = published.description,
+            price = published.price,
+            createdBy = published.createdBy,
+            version = published.version + 1,
+        )
+        
+        return MenuItemRevisionResponse.from(published)
     }
 
     private fun requireMenuItem(

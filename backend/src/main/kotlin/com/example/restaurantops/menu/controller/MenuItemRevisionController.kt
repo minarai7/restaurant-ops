@@ -2,6 +2,7 @@ package com.example.restaurantops.menu.controller
 
 import com.example.restaurantops.menu.model.CreateMenuItemDraftRequest
 import com.example.restaurantops.menu.model.MenuItemRevisionResponse
+import com.example.restaurantops.menu.model.PublishMenuItemRequest
 import com.example.restaurantops.menu.model.UpdateMenuItemDraftRequest
 import com.example.restaurantops.menu.service.MenuItemRevisionService
 import jakarta.validation.Valid
@@ -73,6 +74,19 @@ class MenuItemRevisionController(
         @Valid @RequestBody request: UpdateMenuItemDraftRequest,
     ): MenuItemRevisionResponse {
         return menuItemRevisionService.updateDraft(
+            storeId = storeId,
+            menuItemId = menuItemId,
+            request = request,
+        )
+    }
+
+    @PostMapping("/publish")
+    fun publish(
+        @PathVariable storeId: UUID,
+        @PathVariable menuItemId: UUID,
+        @Valid @RequestBody request: PublishMenuItemRequest,
+    ): MenuItemRevisionResponse {
+        return menuItemRevisionService.publish(
             storeId = storeId,
             menuItemId = menuItemId,
             request = request,

@@ -69,6 +69,7 @@ class MenuItemRevisionRepository(
         description: String?,
         price: Int,
         createdBy: UUID?,
+        version: Int = 1,
     ): MenuItemRevision {
         return jdbcClient
             .sql(
@@ -102,7 +103,7 @@ class MenuItemRevisionRepository(
                     :name,
                     :description,
                     :price,
-                    1,
+                    :version,
                     :createdBy,
                     CURRENT_TIMESTAMP
                 )
@@ -128,6 +129,7 @@ class MenuItemRevisionRepository(
             .param("description", description)
             .param("price", price)
             .param("createdBy", createdBy)
+            .param("version", version)
             .query(rowMapper)
             .single()
     }
@@ -197,6 +199,91 @@ class MenuItemRevisionRepository(
             .query(rowMapper)
             .optional()
             .orElse(null)
+    }
+
+    fun lockDraftByMenuItemIdAndStoreId(
+        menuItemId: UUID,
+        storeId: UUID,
+    ): MenuItemRevision? {
+        return jdbcClient
+            .sql(
+                """
+                SELECT
+                    id,
+                    menu_item_id,
+                    store_id,
+                    revision_number,
+                    status,
+                    name,
+                    description,
+                    price,
+                    version,
+                    created_by,
+                    created_at,
+                    published_at
+                FROM menu_item_revisions
+                WHERE menu_item_id = :menuItemId
+                  AND store_id = :storeId
+                  AND status = 'DRAFT'
+                ORDER BY revision_number DESC
+                LIMIT 1
+                FOR UPDATE
+                """.trimIndent(),
+            )
+            .param("menuItemId", menuItemId)
+            .param("storeId", storeId)
+            .query(rowMapper)
+            .optional()
+            .orElse(null)
+    }
+
+    fun archivePublished(
+        menuItemId: UUID,
+        storeId: UUID,
+    ): Int {
+        return jdbcClient
+            .sql(
+                """
+                UPDATE menu_item_revisions
+                SET status = 'ARCHIVED'
+                WHERE menu_item_id = :menuItemId
+                  AND store_id = :storeId
+                  AND status = 'PUBLISHED'
+                """.trimIndent(),
+            )
+            .param("menuItemId", menuItemId)
+            .param("storeId", storeId)
+            .update()
+    }
+
+    fun publishDraft(
+        id: UUID,
+    ): MenuItemRevision {
+        return jdbcClient
+            .sql(
+                """
+                UPDATE menu_item_revisions
+                SET status = 'PUBLISHED',
+                    published_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+                RETURNING
+                    id,
+                    menu_item_id,
+                    store_id,
+                    revision_number,
+                    status,
+                    name,
+                    description,
+                    price,
+                    version,
+                    created_by,
+                    created_at,
+                    published_at
+                """.trimIndent(),
+            )
+            .param("id", id)
+            .query(rowMapper)
+            .single()
     }
 
     fun updateDraft(
