@@ -8,6 +8,7 @@ data class MenuItemResponse(
     val storeId: UUID,
     val categoryId: UUID,
     val isAvailable: Boolean,
+    val displayOrder: Int,
     val createdAt: LocalDateTime,
     val updatedAt: LocalDateTime,
 ) {
@@ -18,6 +19,7 @@ data class MenuItemResponse(
                 storeId = menuItem.storeId,
                 categoryId = menuItem.categoryId,
                 isAvailable = menuItem.isAvailable,
+                displayOrder = menuItem.displayOrder,
                 createdAt = menuItem.createdAt,
                 updatedAt = menuItem.updatedAt,
             )

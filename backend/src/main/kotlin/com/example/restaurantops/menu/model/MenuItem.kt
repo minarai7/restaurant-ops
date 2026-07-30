@@ -8,6 +8,7 @@ data class MenuItem(
     val storeId: UUID,
     val categoryId: UUID,
     val isAvailable: Boolean,
+    val displayOrder: Int,
     val createdAt: LocalDateTime,
     val updatedAt: LocalDateTime,
 )

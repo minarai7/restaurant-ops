@@ -3,6 +3,8 @@ package com.example.restaurantops.menu.controller
 import com.example.restaurantops.menu.model.CreateMenuItemRequest
 import com.example.restaurantops.menu.model.MenuItemResponse
 import com.example.restaurantops.menu.model.UpdateMenuItemAvailabilityRequest
+import com.example.restaurantops.menu.model.UpdateMenuItemPlacementRequest
+import com.example.restaurantops.menu.service.MenuItemOrderingService
 import com.example.restaurantops.menu.service.MenuItemService
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
@@ -22,6 +24,7 @@ import java.util.UUID
 @RequestMapping("/api/stores/{storeId}/menu-items")
 class MenuItemController(
     private val menuItemService: MenuItemService,
+    private val menuItemOrderingService: MenuItemOrderingService,
 ) {
 
     @PostMapping
@@ -58,6 +61,21 @@ class MenuItemController(
         request: UpdateMenuItemAvailabilityRequest,
     ): MenuItemResponse {
         return menuItemService.updateAvailability(
+            storeId = storeId,
+            menuItemId = menuItemId,
+            request = request,
+        )
+    }
+
+    @PatchMapping("/{menuItemId}/placement")
+    fun updatePlacement(
+        @PathVariable storeId: UUID,
+        @PathVariable menuItemId: UUID,
+        @Valid
+        @RequestBody
+        request: UpdateMenuItemPlacementRequest,
+    ): MenuItemResponse {
+        return menuItemOrderingService.updatePlacement(
             storeId = storeId,
             menuItemId = menuItemId,
             request = request,

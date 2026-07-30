@@ -105,4 +105,37 @@ class MenuCategoryRepository (
             .optional()
             .orElse(null)
     }
+
+    /**
+     * Locks a single category row so concurrent reorders/placements against it
+     * serialize. Callers that need to lock more than one category (moving an
+     * item between categories) must call this once per id, in ascending UUID
+     * order, rather than locking several rows in one statement — Postgres does
+     * not guarantee `FOR UPDATE` acquires locks in `ORDER BY` order.
+     */
+    fun lockByIdAndStoreId(
+        categoryId: UUID,
+        storeId: UUID,
+    ): MenuCategory? {
+        return jdbcClient
+            .sql(
+                """
+                SELECT
+                    id,
+                    store_id,
+                    name,
+                    display_order,
+                    created_at
+                FROM menu_categories
+                WHERE id = :categoryId
+                AND store_id = :storeId
+                FOR UPDATE
+                """.trimIndent(),
+            )
+            .param("categoryId", categoryId)
+            .param("storeId", storeId)
+            .query(menuCategoryRowMapper)
+            .optional()
+            .orElse(null)
+    }
 }

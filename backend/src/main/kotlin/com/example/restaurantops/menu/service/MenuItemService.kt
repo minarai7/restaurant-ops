@@ -27,7 +27,11 @@ class MenuItemService(
     ): MenuItemResponse {
         storeService.requireStore(storeId)
 
-        requireCategory(
+        // Locked (not just read) because `create` assigns display_order from
+        // MAX(display_order) + 1 within the category: two concurrent creates
+        // reading the same MAX without a lock would race for the same slot
+        // and one would fail the (category_id, display_order) unique constraint.
+        lockCategory(
             storeId = storeId,
             categoryId = request.categoryId,
         )
@@ -82,11 +86,11 @@ class MenuItemService(
         return MenuItemResponse.from(menuItem)
     }
 
-    private fun requireCategory(
+    private fun lockCategory(
         storeId: UUID,
         categoryId: UUID,
     ) {
-        menuCategoryRepository.findByIdAndStoreId(
+        menuCategoryRepository.lockByIdAndStoreId(
             categoryId = categoryId,
             storeId = storeId,
         ) ?: throw ResourceNotFoundException(
