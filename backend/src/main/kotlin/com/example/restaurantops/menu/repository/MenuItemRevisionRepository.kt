@@ -237,6 +237,114 @@ class MenuItemRevisionRepository(
             .orElse(null)
     }
 
+    fun markScheduled(
+        id: UUID,
+    ): MenuItemRevision {
+        return jdbcClient
+            .sql(
+                """
+                UPDATE menu_item_revisions
+                SET status = 'SCHEDULED'
+                WHERE id = :id
+                RETURNING
+                    id,
+                    menu_item_id,
+                    store_id,
+                    revision_number,
+                    status,
+                    name,
+                    description,
+                    price,
+                    version,
+                    created_by,
+                    created_at,
+                    published_at
+                """.trimIndent(),
+            )
+            .param("id", id)
+            .query(rowMapper)
+            .single()
+    }
+
+    fun lockByIdAndStoreId(
+        id: UUID,
+        storeId: UUID,
+    ): MenuItemRevision? {
+        return jdbcClient
+            .sql(
+                """
+                SELECT
+                    id,
+                    menu_item_id,
+                    store_id,
+                    revision_number,
+                    status,
+                    name,
+                    description,
+                    price,
+                    version,
+                    created_by,
+                    created_at,
+                    published_at
+                FROM menu_item_revisions
+                WHERE id = :id
+                  AND store_id = :storeId
+                FOR UPDATE
+                """.trimIndent(),
+            )
+            .param("id", id)
+            .param("storeId", storeId)
+            .query(rowMapper)
+            .optional()
+            .orElse(null)
+    }
+
+    fun publishScheduled(
+        id: UUID,
+    ): MenuItemRevision {
+        return jdbcClient
+            .sql(
+                """
+                UPDATE menu_item_revisions
+                SET status = 'PUBLISHED',
+                    published_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+                  AND status = 'SCHEDULED'
+                RETURNING
+                    id,
+                    menu_item_id,
+                    store_id,
+                    revision_number,
+                    status,
+                    name,
+                    description,
+                    price,
+                    version,
+                    created_by,
+                    created_at,
+                    published_at
+                """.trimIndent(),
+            )
+            .param("id", id)
+            .query(rowMapper)
+            .single()
+    }
+
+    fun archiveById(
+        id: UUID,
+    ): Int {
+        return jdbcClient
+            .sql(
+                """
+                UPDATE menu_item_revisions
+                SET status = 'ARCHIVED'
+                WHERE id = :id
+                """.trimIndent(),
+            )
+            .param("id", id)
+            .update()
+    }
+
     fun archivePublished(
         menuItemId: UUID,
         storeId: UUID,

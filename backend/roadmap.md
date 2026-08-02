@@ -1266,7 +1266,9 @@ When moving an item between categories:
 
 ---
 
-### Task 6.5 — Add scheduled publishing with exclusion constraints
+### Task 6.5 — Add scheduled menu publication
+
+Add support for publishing a menu-item revision once, at a specific future time, without anyone needing to be online when it happens.
 
 Add:
 
@@ -1277,38 +1279,51 @@ id
 store_id
 menu_item_id
 revision_id
-active_period
+publish_at
 status
 created_by
 created_at
 processed_at
 ```
 
-Use:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-```
-
-Store the publication interval as:
+Schedule statuses:
 
 ```text
-active_period TSTZRANGE
+SCHEDULED
+PROCESSED
+CANCELLED
+FAILED
 ```
 
-Add:
+Widen the existing revision lifecycle to include a frozen, unpublished state:
 
-```sql
-ALTER TABLE menu_publication_schedules
-ADD CONSTRAINT ex_menu_publication_schedule_overlap
-EXCLUDE USING gist (
-    menu_item_id WITH =,
-    active_period WITH &&
-)
-WHERE (status = 'SCHEDULED');
+```text
+MenuItemRevisionStatus:
+DRAFT
+SCHEDULED
+PUBLISHED
+ARCHIVED
 ```
 
-This prevents overlapping scheduled publication windows for the same menu item. PostgreSQL exclusion constraints are designed to reject rows whose indexed values conflict according to operators such as range overlap.
+`revision_id` must reference an immutable snapshot, not "whatever the draft happens to be" at the scheduled time. Merely storing the current draft's id while leaving it as `DRAFT` is not a real snapshot, because a later edit could silently change what eventually gets published. Creating a schedule therefore transitions the current draft itself.
+
+Inside one transaction:
+
+1. Lock the `menu_items` row.
+2. Lock the current `DRAFT` revision.
+3. Verify `expectedVersion`; return `409` with code `stale_version` if it changed.
+4. Validate that `publishAt` is in the future.
+5. Change the revision from `DRAFT` to `SCHEDULED`.
+6. Insert the schedule, using that revision's `id` as `revision_id`.
+7. Create a new `DRAFT`, copied from the now-`SCHEDULED` revision.
+
+The resulting state:
+
+```text
+revision 1: PUBLISHED
+revision 2: SCHEDULED  <- referenced by the schedule, no longer editable
+revision 3: DRAFT      <- current editable draft
+```
 
 Build:
 
@@ -1320,34 +1335,54 @@ GET    /api/stores/{storeId}/publication-schedules
 DELETE /api/stores/{storeId}/publication-schedules/{scheduleId}
 ```
 
+Request:
+
+```json
+{
+  "publishAt": "2026-08-01T09:00:00",
+  "expectedVersion": 4
+}
+```
+
+`DELETE` is a soft cancel (`SCHEDULED` to `CANCELLED`), not a physical delete — history stays intact for Task 6.6's audit trail. Cancelling also archives the now-orphaned `SCHEDULED` revision, since it can otherwise never be published or edited again. Cancelling an already-`CANCELLED` schedule returns `204` (idempotent); cancelling a `PROCESSED` or `FAILED` schedule returns `409`.
+
 Add a scheduled worker that claims due rows using:
 
 ```sql
-SELECT
-    id,
-    store_id,
-    menu_item_id,
-    revision_id,
-    active_period
+SELECT id
 FROM menu_publication_schedules
 WHERE status = 'SCHEDULED'
-  AND lower(active_period) <= CURRENT_TIMESTAMP
-ORDER BY lower(active_period), id
+  AND publish_at <= CURRENT_TIMESTAMP
+ORDER BY publish_at, id
 FOR UPDATE SKIP LOCKED
 LIMIT 50;
 ```
 
 Multiple backend instances may run the worker, but `SKIP LOCKED` prevents them from claiming the same schedule row.
 
+For each claimed schedule, lock the `menu_items` row and the target revision, then dispatch on the revision's status:
+
+* `SCHEDULED` (expected case) — archive the currently published revision, promote this one to `PUBLISHED`, mark the schedule `PROCESSED` with `processed_at`.
+* `PUBLISHED`, and it is already the item's current published revision — idempotent completion; mark `PROCESSED`.
+* `PUBLISHED`, but a different revision is now live — this schedule can never apply; mark `FAILED`.
+* `DRAFT` — schedule creation should have frozen it; mark `FAILED`.
+* `ARCHIVED` — permanently superseded; mark `FAILED`.
+
+A `FAILED` outcome must still commit (return normally, do not throw), or the worker would re-claim the same permanently invalid row forever. Only a genuinely transient failure should throw and roll back, leaving the schedule `SCHEDULED` so the next tick retries it.
+
 **Test**
 
-* A valid future schedule is created.
-* An empty or reversed time range is rejected.
-* Overlapping schedules for one item return `409`.
-* Different menu items may have overlapping schedules.
+* A valid future schedule freezes the current draft into `SCHEDULED` and creates a new editable `DRAFT`.
+* A past or missing `publishAt` is rejected.
+* A stale `expectedVersion` returns `409 stale_version`.
+* Editing the draft after scheduling does not change the scheduled revision.
 * Two worker instances do not process the same schedule.
-* A failed publication leaves the schedule retryable.
-* Successful processing records `processed_at`.
+* The worker publishes a due schedule and archives the previously published revision.
+* An already-published target is treated as idempotent completion.
+* An archived or draft target is marked `FAILED` and not re-claimed.
+* A transient failure leaves the schedule `SCHEDULED` and retryable.
+* Cancelling a `SCHEDULED` schedule archives its revision and returns `204`; cancelling again is idempotent; cancelling a `PROCESSED` or `FAILED` schedule returns `409`.
+* Listing never returns another store's schedules.
 
 ---
 
